@@ -75,10 +75,6 @@ dependencies {
     functionalTestRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
 
-test {
-    useJUnitPlatform()
-}
-
 def integrationTestTask = tasks.register("integrationTest", Test) {
     description = 'Runs the integration tests.'
     group = "verification"

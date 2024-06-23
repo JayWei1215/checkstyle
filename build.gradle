@@ -83,6 +83,35 @@ def integrationTestTask = tasks.register("integrationTest", Test) {
     mustRunAfter(tasks.named('test'))
 }
 
+//tasks.register('checkstyleMain', Checkstyle) {
+//    source = sourceSets.main.allJava
+//    classpath = sourceSets.main.compileClasspath
+//    checkstyleClasspath = sourceSets.main.compileClasspath
+//    configFile = file("$rootDir/config/checkstyle/checkstyle.xml")
+//    configDirectory = file("$rootDir/config/checkstyle")
+//}
+//
+//tasks.register('checkstyleTest', Checkstyle) {
+//    source = sourceSets.test.allJava
+//    classpath = sourceSets.test.compileClasspath
+//    checkstyleClasspath = sourceSets.test.compileClasspath
+//    configFile = file("$rootDir/config/checkstyle/checkstyle.xml")
+//    configDirectory = file("$rootDir/config/checkstyle")
+//}
+//
+//def otherSourceSets = sourceSets.findAll { sourceSet ->
+//    !sourceSet.name in ['main', 'test']
+//}
+//
+//// 定义 checkstyleOther 任务，处理其他 sourceSets
+//tasks.register('checkstyleOther', Checkstyle) {
+//    source = files(otherSourceSets*.allJava)
+//    classpath = files(otherSourceSets*.compileClasspath)
+//    checkstyleClasspath = files(otherSourceSets*.compileClasspath)
+//    configFile = file("$rootDir/config/checkstyle/checkstyle.xml")
+//    configDirectory = file("$rootDir/config/checkstyle")
+//}
+
 tasks.withType(Test).configureEach {
     // Using JUnitPlatform for running tests
     useJUnitPlatform()
@@ -90,5 +119,25 @@ tasks.withType(Test).configureEach {
 
 tasks.named('check') {
     dependsOn integrationTestTask
+//    dependsOn tasks.named('checkstyleMain')
+//    dependsOn tasks.named('checkstyleTest')
+//    dependsOn tasks.named('checkstyleOther')
 }
+
+//tasks.named('check').configure {
+//    doFirst {
+//        println "Check task dependencies:"
+//        dependsOn.each { dependency ->
+//            if (dependency instanceof String) {
+//                println "String dependency: $dependency"
+//            } else if (dependency instanceof Task) {
+//                println "Dependency task path: ${dependency.path}"
+//            } else {
+//                println "Other type of dependency: ${dependency.getClass().name}"
+//            }
+//        }
+//    }
+//}
+
+
 

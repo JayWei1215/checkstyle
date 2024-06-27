@@ -79,8 +79,8 @@ public interface ExecutionResult {
 //     * @param expectedOutput The expected log message, with line endings normalized to a newline character.
 //     */
 //    boolean hasErrorOutput(String expectedOutput);
-//
-//    ExecutionResult assertOutputEquals(String expectedOutput, boolean ignoreExtraLines, boolean ignoreLineOrder);
+
+    ExecutionResult assertOutputEquals(String expectedOutput, boolean ignoreExtraLines, boolean ignoreLineOrder);
 //
 //    /**
 //     * Asserts that this result includes the given non-error log message. Does not consider any text in or following the build result message (use {@link #assertHasPostBuildOutput(String)} instead).
@@ -173,8 +173,8 @@ public interface ExecutionResult {
 //     */
 //    ExecutionResult assertTaskNotSkipped(String taskPath);
 //
-//    /**
-//     * Asserts that the important information from this result has been verified by the test.
-//     */
-//    void assertResultVisited();
+    /**
+     * Asserts that the important information from this result has been verified by the test.
+     */
+    void assertResultVisited();
 }

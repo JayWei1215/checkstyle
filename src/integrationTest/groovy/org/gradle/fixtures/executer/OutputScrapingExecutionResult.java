@@ -201,6 +201,17 @@ public class OutputScrapingExecutionResult implements ExecutionResult {
         return this;
     }
 
+    @Override
+    public ExecutionResult assertOutputEquals(String expectedOutput, boolean ignoreExtraLines, boolean ignoreLineOrder) {
+        SequentialOutputMatcher matcher = ignoreLineOrder ? new AnyOrderOutputMatcher() : new SequentialOutputMatcher();
+        matcher.assertOutputMatches(expectedOutput, getNormalizedOutput(), ignoreExtraLines);
+        return this;
+    }
+
+    @Override
+    public void assertResultVisited() {
+    }
+
     public Set<String> getSkippedTasks() {
         return new TreeSet<>(grepTasks(SKIPPED_TASK_PATTERN));
     }

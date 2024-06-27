@@ -107,4 +107,59 @@ class ForkingGradleHandle extends OutputScrapingGradleHandle {
         }
         return handle;
     }
+
+    @Override
+    public ExecutionResult waitForFinish() {
+        return waitForStop(false);
+    }
+
+    private ExecutionResult waitForStop(boolean expectFailure) {
+        ExecResult execResult = getExecHandle().waitForFinish();
+        if (durationMeasurement != null) {
+            durationMeasurement.stop();
+        }
+        execResult.rethrowFailure(); // nop if all ok
+
+        String output = getStandardOutput();
+        String error = getErrorOutput();
+
+        // Exit value is unreliable for determination of process failure.
+        // On rare occasions, exitValue == 0 when the process is expected to fail, and the error output indicates failure.
+        boolean buildFailed = execResult.getExitValue() != 0 || OutputScrapingExecutionFailure.hasFailure(output);
+        ExecutionResult executionResult = buildFailed ? toExecutionFailure(output, error) : toExecutionResult(output, error);
+
+        if (expectFailure && !buildFailed) {
+            throw unexpectedBuildStatus(execResult, output, error, "did not fail");
+        }
+        if (!expectFailure && buildFailed) {
+            throw unexpectedBuildStatus(execResult, output, error, "failed");
+        }
+
+        resultAssertion.execute(executionResult);
+        return executionResult;
+    }
+
+    @Override
+    public String getStandardOutput() {
+        return standardOutputCapturer.getOutputAsString();
+    }
+
+    @Override
+    public String getErrorOutput() {
+        return errorOutputCapturer.getOutputAsString();
+    }
+
+    private UnexpectedBuildFailure unexpectedBuildStatus(ExecResult execResult, String output, String error, String status) {
+        ExecHandle execHandle = getExecHandle();
+        String message =
+                format("Gradle execution %s in %s with: %s %s%n"
+                                + "Process ExecResult:%n%s%n"
+                                + "-----%n"
+                                + "Output:%n%s%n"
+                                + "-----%n"
+                                + "Error:%n%s%n"
+                                + "-----%n",
+                        status, execHandle.getDirectory(), execHandle.getCommand(), execHandle.getArguments(), execResult.toString(), output, error);
+        return new UnexpectedBuildFailure(message);
+    }
 }

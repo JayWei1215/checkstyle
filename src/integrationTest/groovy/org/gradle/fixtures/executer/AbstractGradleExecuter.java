@@ -8,39 +8,61 @@ import groovy.lang.Closure;
 import groovy.lang.DelegatesTo;
 import org.gradle.api.Action;
 import org.gradle.api.JavaVersion;
+import org.gradle.api.internal.initialization.DefaultClassLoaderScope;
 import org.gradle.api.logging.Logger;
 import org.gradle.api.logging.Logging;
 import org.gradle.api.logging.configuration.ConsoleOutput;
 import org.gradle.api.logging.configuration.WarningMode;
 import org.gradle.fixtures.ExecutionResult;
+import org.gradle.fixtures.daemon.DaemonLogsAnalyzer;
 import org.gradle.fixtures.file.TestDirectoryProvider;
 import org.gradle.fixtures.file.TestFile;
 import org.gradle.fixtures.internal.BuildProcessState;
 import org.gradle.fixtures.internal.NativeServicesTestFixture;
+import org.gradle.fixtures.internal.ScriptFileUtil;
+import org.gradle.fixtures.validation.ValidationServicesFixture;
 import org.gradle.internal.ImmutableActionSet;
 import org.gradle.internal.MutableActionSet;
+import org.gradle.internal.UncheckedException;
 import org.gradle.internal.agents.AgentStatus;
 import org.gradle.internal.classpath.ClassPath;
+import org.gradle.internal.featurelifecycle.LoggingDeprecatedFeatureHandler;
 import org.gradle.internal.jvm.JavaHomeException;
 import org.gradle.internal.jvm.Jvm;
 import org.gradle.internal.jvm.inspection.JvmVersionDetector;
 import org.gradle.internal.logging.LoggingManagerInternal;
 import org.gradle.internal.logging.services.DefaultLoggingManagerFactory;
 import org.gradle.internal.logging.services.LoggingServiceRegistry;
+import org.gradle.internal.nativeintegration.console.TestOverrideConsoleDetector;
+import org.gradle.internal.nativeintegration.services.NativeServices;
 import org.gradle.internal.service.ServiceRegistry;
+import org.gradle.jvm.toolchain.internal.ToolchainConfiguration;
+import org.gradle.launcher.cli.DefaultCommandLineActionFactory;
+import org.gradle.launcher.daemon.configuration.DaemonBuildOptions;
+import org.gradle.process.internal.streams.SafeStreams;
 import org.gradle.util.GradleVersion;
 import org.gradle.util.internal.ClosureBackedAction;
 import org.gradle.util.internal.CollectionUtils;
 import org.gradle.util.internal.GFileUtils;
+import org.gradle.util.internal.TextUtil;
 
 import java.io.*;
 import java.net.URL;
 import java.nio.charset.Charset;
 import java.nio.file.Files;
 import java.util.*;
+import java.util.function.Predicate;
+import java.util.function.Supplier;
+import java.util.stream.Collectors;
 
 import static com.google.common.base.Preconditions.checkNotNull;
+import static java.util.stream.Collectors.joining;
+import static org.gradle.api.internal.artifacts.BaseRepositoryFactory.PLUGIN_PORTAL_OVERRIDE_URL_PROPERTY;
+import static org.gradle.fixtures.RepoScriptBlockUtil.gradlePluginRepositoryMirrorUrl;
 import static org.gradle.fixtures.executer.AbstractGradleExecuter.CliDaemonArgument.*;
+import static org.gradle.internal.service.scopes.DefaultGradleUserHomeScopeServiceRegistry.REUSE_USER_HOME_SERVICES;
+import static org.gradle.util.internal.CollectionUtils.collect;
+import static org.gradle.util.internal.CollectionUtils.join;
 import static org.gradle.util.internal.DefaultGradleVersion.VERSION_OVERRIDE_VAR;
 
 public abstract class AbstractGradleExecuter implements GradleExecuter {
@@ -64,9 +86,11 @@ public abstract class AbstractGradleExecuter implements GradleExecuter {
 
     private final Logger logger;
 
+    private final Set<File> isolatedDaemonBaseDirs = new HashSet<>();
     private final List<String> args = new ArrayList<>();
     private final List<String> tasks = new ArrayList<>();
     private boolean allowExtraLogging = true;
+    private final List<ExecutionResult> results = new ArrayList<>();
     protected ConsoleAttachment consoleAttachment = ConsoleAttachment.NOT_ATTACHED;
     private File workingDir;
     private boolean quiet;
@@ -118,6 +142,7 @@ public abstract class AbstractGradleExecuter implements GradleExecuter {
 
     protected boolean interactive;
 
+    private TestFile tmpDir;
     private DurationMeasurement durationMeasurement;
 
     protected final GradleVersion gradleVersion;
@@ -303,6 +328,250 @@ public abstract class AbstractGradleExecuter implements GradleExecuter {
         return loggingServices;
     }
 
+    public InputStream connectStdIn() {
+        try {
+            return stdinPipe == null ? SafeStreams.emptyInput() : new PipedInputStream(stdinPipe);
+        } catch (IOException e) {
+            throw UncheckedException.throwAsUncheckedException(e);
+        }
+    }
+
+    protected Logger getLogger() {
+        return logger;
+    }
+
+    public String getExecutable() {
+        return executable;
+    }
+
+    private void calculateLauncherJvmArgs(GradleInvocation gradleInvocation) {
+        // Add JVM args that were explicitly requested
+        gradleInvocation.launcherJvmArgs.addAll(commandLineJvmOpts);
+
+        if (isUseDaemon() && !gradleInvocation.buildJvmArgs.isEmpty()) {
+            // Pass build JVM args through to daemon via system property on the launcher JVM
+            String quotedArgs = join(" ", collect(gradleInvocation.buildJvmArgs, input -> String.format("'%s'", input)));
+            gradleInvocation.implicitLauncherJvmArgs.add("-Dorg.gradle.jvmargs=" + quotedArgs);
+        } else {
+            // Have to pass build JVM args directly to launcher JVM
+            gradleInvocation.launcherJvmArgs.addAll(gradleInvocation.buildJvmArgs);
+        }
+
+        // Set the implicit system properties regardless of whether default JVM args are required or not, this should not interfere with tests' intentions
+        // These will also be copied across to any daemon used
+        for (Map.Entry<String, String> entry : getImplicitJvmSystemProperties().entrySet()) {
+            String key = entry.getKey();
+            String value = entry.getValue();
+            gradleInvocation.implicitLauncherJvmArgs.add(String.format("-D%s=%s", key, value));
+        }
+        if (isDebugLauncher()) {
+            if (System.getenv().containsKey("CI")) {
+                throw new IllegalArgumentException("Builds cannot be started with the debugger enabled on CI. This will cause tests to hang forever. Remove the call to startLauncherInDebugger().");
+            }
+            gradleInvocation.implicitLauncherJvmArgs.add(debugLauncher.toDebugArgument());
+        }
+        gradleInvocation.implicitLauncherJvmArgs.add("-ea");
+    }
+
+    /**
+     * Returns the set of system properties that should be set on every JVM used by this executer.
+     */
+    protected Map<String, String> getImplicitJvmSystemProperties() {
+        Map<String, String> properties = new LinkedHashMap<>();
+
+        if (getUserHomeDir() != null) {
+            properties.put("user.home", getUserHomeDir().getAbsolutePath());
+        }
+
+        properties.put(DaemonBuildOptions.IdleTimeoutOption.GRADLE_PROPERTY, "" + (daemonIdleTimeoutSecs * 1000));
+        properties.put(DaemonBuildOptions.BaseDirOption.GRADLE_PROPERTY, daemonBaseDir.getAbsolutePath());
+        if (!noExplicitNativeServicesDir) {
+            properties.put(NativeServices.NATIVE_DIR_OVERRIDE, buildContext.getNativeServicesDir().getAbsolutePath());
+        }
+        properties.put(LoggingDeprecatedFeatureHandler.ORG_GRADLE_DEPRECATION_TRACE_PROPERTY_NAME, Boolean.toString(fullDeprecationStackTrace));
+
+        boolean useCustomGradleUserHomeDir = gradleUserHomeDir != null && !gradleUserHomeDir.equals(buildContext.getGradleUserHomeDir());
+        if (useOwnUserHomeServices || useCustomGradleUserHomeDir) {
+            properties.put(REUSE_USER_HOME_SERVICES, "false");
+        }
+        if (buildJvmOpts.stream().noneMatch(arg -> arg.startsWith("-Djava.io.tmpdir="))) {
+            if (tmpDir == null) {
+                tmpDir = getDefaultTmpDir();
+            }
+            String tmpDirPath = tmpDir.createDir().getAbsolutePath();
+            if (!tmpDirPath.contains(" ") || (getDistribution().isSupportsSpacesInGradleAndJavaOpts() && supportsWhiteSpaceInEnvVars())) {
+                properties.put("java.io.tmpdir", tmpDirPath);
+            }
+        }
+
+        if (!disablePluginRepositoryMirror) {
+            properties.put(PLUGIN_PORTAL_OVERRIDE_URL_PROPERTY, gradlePluginRepositoryMirrorUrl());
+        }
+
+        properties.put("file.encoding", getDefaultCharacterEncoding());
+        if (getJavaVersionFromJavaHome() == JavaVersion.VERSION_18) {
+            properties.put("sun.stdout.encoding", getDefaultCharacterEncoding());
+            properties.put("sun.stderr.encoding", getDefaultCharacterEncoding());
+        } else if (getJavaVersionFromJavaHome().isCompatibleWith(JavaVersion.VERSION_19)) {
+            properties.put("stdout.encoding", getDefaultCharacterEncoding());
+            properties.put("stderr.encoding", getDefaultCharacterEncoding());
+        }
+        Locale locale = getDefaultLocale();
+        if (locale != null) {
+            properties.put("user.language", locale.getLanguage());
+            properties.put("user.country", locale.getCountry());
+            properties.put("user.variant", locale.getVariant());
+        }
+
+        if (eagerClassLoaderCreationChecksOn) {
+            properties.put(DefaultClassLoaderScope.STRICT_MODE_PROPERTY, "true");
+        }
+
+        if (interactive) {
+            properties.put(TestOverrideConsoleDetector.INTERACTIVE_TOGGLE, "true");
+        }
+
+        properties.put(DefaultCommandLineActionFactory.WELCOME_MESSAGE_ENABLED_SYSTEM_PROPERTY, Boolean.toString(renderWelcomeMessage));
+
+        // Having this unset is now deprecated, will default to `false` in Gradle 9.0
+        // TODO remove - see https://github.com/gradle/gradle/issues/26810
+        properties.put("org.gradle.kotlin.dsl.skipMetadataVersionCheck", "false");
+
+        return properties;
+    }
+
+    /**
+     * Adjusts the calculated invocation prior to execution. This method is responsible for handling the implicit launcher JVM args in some way, by mutating the invocation appropriately.
+     */
+    protected void transformInvocation(GradleInvocation gradleInvocation) {
+        gradleInvocation.launcherJvmArgs.addAll(0, gradleInvocation.implicitLauncherJvmArgs);
+        gradleInvocation.implicitLauncherJvmArgs.clear();
+    }
+
+    protected List<String> getAllArgs() {
+        List<String> allArgs = new ArrayList<>();
+        if (buildScript != null) {
+            allArgs.add("--build-file");
+            allArgs.add(buildScript.getAbsolutePath());
+        }
+        if (projectDir != null) {
+            allArgs.add("--project-dir");
+            allArgs.add(projectDir.getAbsolutePath());
+        }
+        for (File initScript : initScripts) {
+            allArgs.add("--init-script");
+            allArgs.add(initScript.getAbsolutePath());
+        }
+        if (settingsFile != null) {
+            allArgs.add("--settings-file");
+            allArgs.add(settingsFile.getAbsolutePath());
+        }
+        if (quiet) {
+            allArgs.add("--quiet");
+        }
+        if (noDaemonArgumentGiven()) {
+            if (isUseDaemon()) {
+                allArgs.add("--daemon");
+            } else {
+                allArgs.add("--no-daemon");
+            }
+        }
+        if (showStacktrace) {
+            allArgs.add("--stacktrace");
+        }
+        if (taskList) {
+            allArgs.add("tasks");
+        }
+        if (dependencyList) {
+            allArgs.add("dependencies");
+        }
+
+        if (settingsFile == null && !ignoreMissingSettingsFile) {
+            ensureSettingsFileAvailable();
+        }
+
+        if (getGradleUserHomeDir() != null) {
+            allArgs.add("--gradle-user-home");
+            allArgs.add(getGradleUserHomeDir().getAbsolutePath());
+        }
+
+        if (consoleType != null) {
+            allArgs.add("--console=" + TextUtil.toLowerCaseLocaleSafe(consoleType.toString()));
+        }
+
+        if (warningMode != null) {
+            allArgs.add("--warning-mode=" + TextUtil.toLowerCaseLocaleSafe(warningMode.toString()));
+        }
+
+        if (disableToolchainDownload) {
+            allArgs.add("-Porg.gradle.java.installations.auto-download=false");
+        }
+        if (disableToolchainDetection) {
+            allArgs.add("-P" + ToolchainConfiguration.AUTO_DETECT + "=false");
+        }
+
+        boolean hasAgentArgument = args.stream().anyMatch(s -> s.contains(DaemonBuildOptions.ApplyInstrumentationAgentOption.GRADLE_PROPERTY));
+        if (!hasAgentArgument && !isAgentInstrumentationEnabled()) {
+            allArgs.add("-D" + DaemonBuildOptions.ApplyInstrumentationAgentOption.GRADLE_PROPERTY + "=false");
+        }
+
+        allArgs.addAll(args);
+        allArgs.addAll(tasks);
+        return allArgs;
+    }
+
+    protected File getJavaHomeLocation() {
+        return new File(getJavaHome());
+    }
+
+    protected String getJavaHome() {
+        return javaHome == null ? Jvm.current().getJavaHome().getAbsolutePath() : javaHome;
+    }
+
+    public File getUserHomeDir() {
+        return userHomeDir;
+    }
+
+    protected TestFile getDefaultTmpDir() {
+        return buildContext.getTmpDir().createDir();
+    }
+
+    protected boolean supportsWhiteSpaceInEnvVars() {
+        return true;
+    }
+
+    private boolean noDaemonArgumentGiven() {
+        return resolveCliDaemonArgument() == NOT_DEFINED;
+    }
+
+    private void ensureSettingsFileAvailable() {
+        TestFile workingDir = new TestFile(getWorkingDir());
+        TestFile dir = workingDir;
+        while (dir != null && getTestDirectoryProvider().getTestDirectory().isSelfOrDescendant(dir)) {
+            if (hasSettingsFile(dir) || hasSettingsFile(dir.file("master"))) {
+                return;
+            }
+            dir = dir.getParentFile();
+        }
+        workingDir.createFile("settings.gradle");
+    }
+
+    private static boolean hasSettingsFile(TestFile dir) {
+        if (dir.isDirectory()) {
+            String[] settingsFileNames = ScriptFileUtil.getValidSettingsFileNames();
+            for (String settingsFileName : settingsFileNames) {
+                if (dir.file(settingsFileName).isFile()) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    public Locale getDefaultLocale() {
+        return defaultLocale;
+    }
+
     @Override
     public GradleExecuter reset() {
         args.clear();
@@ -396,7 +665,61 @@ public abstract class AbstractGradleExecuter implements GradleExecuter {
         });
     }
 
+    /**
+     * Allows a subclass to expose additional APIs for running builds.
+     */
+    protected ExecutionResult run(Supplier<ExecutionResult> action) {
+        beforeBuildSetup();
+        try {
+            ExecutionResult result = action.get();
+            afterBuildCleanup(result);
+            return result;
+        } finally {
+            finished();
+        }
+    }
+
     protected abstract ExecutionResult doRun();
+
+    private void beforeBuildSetup() {
+        for (ExecutionResult result : results) {
+            result.assertResultVisited();
+        }
+        beforeExecute.execute(this);
+        assertCanExecute();
+        assert !(usesSharedDaemons() && (args.contains("--stop") || tasks.contains("--stop"))) : "--stop cannot be used with daemons that are shared with other tests, since this will cause other tests to fail.";
+        collectStateBeforeExecution();
+    }
+
+    private void afterBuildCleanup(ExecutionResult result) {
+        afterExecute.execute(this);
+        results.add(result);
+        checkForDaemonCrashes(getWorkingDir(), it -> true);
+    }
+
+    protected void finished() {
+        reset();
+    }
+
+    private void collectStateBeforeExecution() {
+        if (!isSharedDaemons()) {
+            isolatedDaemonBaseDirs.add(daemonBaseDir);
+        }
+    }
+
+    private void checkForDaemonCrashes(File dirToSearch, Predicate<File> crashLogFilter) {
+        if (checkDaemonCrash) {
+            List<File> crashLogs = DaemonLogsAnalyzer.findCrashLogs(dirToSearch).stream()
+                    .filter(crashLogFilter)
+                    .collect(Collectors.toList());
+            if (!crashLogs.isEmpty()) {
+                throw new AssertionError(String.format(
+                        "Found crash logs: '%s'",
+                        crashLogs.stream().map(File::getAbsolutePath).collect(joining("', '"))
+                ));
+            }
+        }
+    }
 
     @Override
     public GradleExecuter copyTo(GradleExecuter executer) {
@@ -934,6 +1257,21 @@ public abstract class AbstractGradleExecuter implements GradleExecuter {
     @Override
     public boolean isProfile() {
         return !profiler.isEmpty();
+    }
+
+    @Override
+    public boolean isDebugLauncher() {
+        return debugLauncher.isEnabled();
+    }
+
+    @Override
+    public TestFile getGradleUserHomeDir() {
+        return gradleUserHomeDir;
+    }
+
+    @Override
+    public boolean usesSharedDaemons() {
+        return isSharedDaemons();
     }
 
     protected GradleHandle createGradleHandle() {

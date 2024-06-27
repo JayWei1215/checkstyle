@@ -6,6 +6,7 @@ import org.gradle.internal.properties.annotations.PropertyAnnotationHandler;
 import org.gradle.internal.service.DefaultServiceRegistry;
 import org.gradle.internal.service.ServiceRegistry;
 import org.gradle.internal.service.scopes.ExecutionGlobalServices;
+import org.gradle.fixtures.internal.Provides;
 
 public class ValidationServicesFixture {
     public static ServiceRegistry getServices() {

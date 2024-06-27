@@ -3,11 +3,15 @@ package org.gradle.fixtures
 import org.gradle.api.Action
 import org.gradle.api.internal.DocumentationRegistry
 import org.gradle.api.problems.internal.DefaultProblemProgressDetails
+import org.gradle.fixtures.dsl.GradleDsl
 import org.gradle.fixtures.executer.ExecutionFailure
 import org.gradle.fixtures.executer.GradleContextualExecuter
+import org.gradle.fixtures.executer.GradleDistribution
 import org.gradle.fixtures.executer.GradleExecuter
+import org.gradle.fixtures.executer.IntegrationTestBuildContext
+import org.gradle.fixtures.executer.UnderDevelopmentGradleDistribution
 import org.gradle.fixtures.file.TestFile
-
+import org.gradle.fixtures.problems.ReceivedProblem
 import org.gradle.internal.impldep.org.junit.Rule
 
 import org.gradle.util.internal.VersionNumber
@@ -20,6 +24,7 @@ import org.gradle.fixtures.file.TestNameTestDirectoryProvider
 import java.nio.file.Files
 import java.util.regex.Pattern
 
+import static org.gradle.fixtures.dsl.GradleDsl.GROOVY
 
 @SuppressWarnings("IntegrationTestFixtures")
 abstract class AbstractIntegrationSpec extends Specification {
@@ -30,8 +35,14 @@ abstract class AbstractIntegrationSpec extends Specification {
     private GradleExecuter executor
     private boolean ignoreCleanupAssertions
 
+    GradleDistribution distribution = new UnderDevelopmentGradleDistribution(getBuildContext())
     private ExecutionResult currentResult
     private ExecutionFailure currentFailure
+    private List<ReceivedProblem> receivedProblems
+
+    static String mavenCentralRepository(GradleDsl dsl = GROOVY) {
+        RepoScriptBlockUtil.mavenCentralRepository(dsl)
+    }
 
     GradleExecuter getExecuter() {
         if (executor == null) {
@@ -68,6 +79,13 @@ abstract class AbstractIntegrationSpec extends Specification {
         return result
     }
 
+    ExecutionResult getResult() {
+        if (currentResult == null) {
+            throw new IllegalStateException("No build result is available yet.")
+        }
+        return currentResult
+    }
+
     def resetProblemApiCheck() {
         // By nulling out the receivedProblems, upon calling getReceivedProblems() we will re-fetch the problems from the build operations fixture.
         receivedProblems = null
@@ -78,4 +96,7 @@ abstract class AbstractIntegrationSpec extends Specification {
         currentResult = result
     }
 
+    IntegrationTestBuildContext getBuildContext() {
+        return IntegrationTestBuildContext.INSTANCE
+    }
 }

@@ -1,6 +1,6 @@
 package org.gradle.fixtures.executer;
 
-import org.gradle.fixtures.ExecutionResult
+import org.gradle.fixtures.ExecutionResult;
 
 public class ErrorsOnStdoutScrapingExecutionResult implements ExecutionResult {
     private final ExecutionResult delegate;
@@ -27,6 +27,17 @@ public class ErrorsOnStdoutScrapingExecutionResult implements ExecutionResult {
     @Override
     public ExecutionResult assertTasksExecuted(Object... taskPaths) {
         delegate.assertTasksExecuted(taskPaths);
+        return this;
+    }
+
+    @Override
+    public void assertResultVisited() {
+        delegate.assertResultVisited();
+    }
+
+    @Override
+    public ExecutionResult assertOutputEquals(String expectedOutput, boolean ignoreExtraLines, boolean ignoreLineOrder) {
+        delegate.assertOutputEquals(expectedOutput, ignoreExtraLines, ignoreLineOrder);
         return this;
     }
 }

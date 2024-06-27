@@ -108,6 +108,8 @@ public class IntegrationTestBuildContext {
 
     @Nullable
     private static TestFile optionalFile(String propertyName) {
+        //todo how to get the gradleHomeDir from the build script?
+        System.setProperty("integTest.gradleHomeDir", "/usr/local/gradle-8.8");
         String path = System.getProperty(propertyName);
         // MODULE_WORKING_DIR doesn't seem to work correctly and MODULE_DIR seems to be in `.idea/modules/<path-to-subproject>`
         // See https://youtrack.jetbrains.com/issue/IDEA-194910

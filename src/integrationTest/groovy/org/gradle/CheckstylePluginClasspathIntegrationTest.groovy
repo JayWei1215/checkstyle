@@ -24,12 +24,19 @@ include "client"
         file("build.gradle") << """
 subprojects {
     apply plugin: "java"
-    apply plugin: "checkstyle"
+    apply plugin: "org.gradle.checkstyle"
 
-    ${mavenCentralRepository()}
+    repositories {
+        mavenLocal()
+        mavenCentral()
+    }
+
+    dependencies {
+        checkstyle 'org.gradle:checkstyle:1.0-SNAPSHOT'
+    }
 
     checkstyle {
-        toolVersion = '$version'
+        toolVersion = '1.0-SNAPSHOT'
         configFile rootProject.file("checkstyle.xml")
     }
 }

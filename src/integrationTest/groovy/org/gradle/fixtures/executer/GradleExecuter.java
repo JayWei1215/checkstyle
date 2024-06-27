@@ -8,6 +8,7 @@ import org.gradle.api.logging.configuration.ConsoleOutput;
 import org.gradle.api.logging.configuration.WarningMode;
 import org.gradle.fixtures.ExecutionResult;
 import org.gradle.fixtures.file.TestDirectoryProvider;
+import org.gradle.fixtures.file.TestFile;
 import org.gradle.internal.concurrent.Stoppable;
 import org.gradle.util.GradleVersion;
 import org.gradle.util.internal.TextUtil;
@@ -422,10 +423,10 @@ public interface GradleExecuter extends Stoppable {
 //     */
 //    GradleExecuter withWorkerDaemonsExpirationDisabled();
 //
-//    /**
-//     * Returns true if this executer will share daemons with other executers.
-//     */
-//    boolean usesSharedDaemons();
+    /**
+     * Returns true if this executer will share daemons with other executers.
+     */
+    boolean usesSharedDaemons();
 
 //    /**
 //     * Use {@link #requireOwnGradleUserHomeDir(String because)} instead.
@@ -447,7 +448,7 @@ public interface GradleExecuter extends Stoppable {
 ////    /**
 ////     * The Gradle user home dir that will be used for executions.
 ////     */
-////    TestFile getGradleUserHomeDir();
+    TestFile getGradleUserHomeDir();
 //
     /**
      * The distribution used to execute.
@@ -480,8 +481,8 @@ public interface GradleExecuter extends Stoppable {
     GradleExecuter withForceInteractive(boolean flag);
 
     boolean isDebug();
-//
-//    boolean isProfile();
+
+    boolean isProfile();
 
 //    /**
 //     * Starts the launcher JVM (daemon client) in suspended debug mode
@@ -493,7 +494,7 @@ public interface GradleExecuter extends Stoppable {
      */
     GradleExecuter startLauncherInDebugger(Action<JavaDebugOptionsInternal> action);
 
-//    boolean isDebugLauncher();
+    boolean isDebugLauncher();
 
     /**
      * Clears previous settings so that instance can be reused

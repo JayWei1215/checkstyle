@@ -11,6 +11,7 @@ public class GradleContextualExecuter extends AbstractDelegatingGradleExecuter {
 
     private GradleExecuter gradleExecuter;
     private Executer executerType;
+    private static final String EXECUTER_SYS_PROP = "org.gradle.integtest.executer";
 
     private enum Executer {
         embedded(false),
@@ -31,6 +32,15 @@ public class GradleContextualExecuter extends AbstractDelegatingGradleExecuter {
             this.forks = forks;
             this.executeParallel = parallel;
         }
+    }
+
+    public GradleContextualExecuter(GradleDistribution distribution, TestDirectoryProvider testDirectoryProvider, IntegrationTestBuildContext buildContext) {
+        super(distribution, testDirectoryProvider, buildContext);
+        this.executerType = getSystemPropertyExecuter();
+    }
+
+    private static Executer getSystemPropertyExecuter() {
+        return Executer.valueOf(System.getProperty(EXECUTER_SYS_PROP, Executer.forking.toString()));
     }
 
     @Override

@@ -1,22 +1,155 @@
 plugins {
     id 'java'
+    id 'groovy'
+    id 'java-gradle-plugin'
+    id 'maven-publish'
 }
 
 group = 'org.gradle'
 version = '1.0-SNAPSHOT'
 
+publishing {
+    publications {
+        mavenJava(MavenPublication) {
+            from components.java
+        }
+    }
+    repositories {
+        mavenLocal()
+    }
+}
+
 repositories {
     mavenCentral()
 }
 
-dependencies {
-    testImplementation platform('org.junit:junit-bom:5.10.0')
-    testImplementation 'org.junit.jupiter:junit-jupiter'
-    implementation gradleApi()
-    implementation 'com.google.guava:guava:32.1.1-jre'
-    implementation localGroovy()
+configurations {
+    integrationTestCompileClasspath {
+        canBeResolved = true
+        canBeConsumed = false
+        extendsFrom configurations.implementation
+    }
+    integrationTestRuntimeClasspath {
+        canBeResolved = true
+        canBeConsumed = false
+        extendsFrom configurations.runtimeClasspath
+    }
 }
 
-test {
+sourceSets {
+    main {
+        java {
+            srcDirs = ['src/main/java']
+        }
+        resources {
+            srcDirs = ['src/main/resources']
+        }
+    }
+    test {
+        groovy {
+            srcDirs = ['src/test/groovy']
+        }
+        compileClasspath += sourceSets.main.output + configurations.integrationTestCompileClasspath
+        runtimeClasspath += sourceSets.main.output + configurations.integrationTestRuntimeClasspath
+    }
+    integrationTest {
+        groovy {
+            srcDirs = ['src/integrationTest/groovy']
+        }
+        compileClasspath += sourceSets.main.output + configurations.integrationTestCompileClasspath
+        runtimeClasspath += sourceSets.main.output + configurations.integrationTestRuntimeClasspath
+    }
+    functionalTest {
+        groovy {
+            srcDirs = ['src/functionalTest/groovy']
+        }
+        compileClasspath += sourceSets.main.output + configurations.integrationTestCompileClasspath
+        runtimeClasspath += sourceSets.main.output + configurations.integrationTestRuntimeClasspath
+    }
+}
+
+dependencies {
+    implementation gradleApi()
+    implementation 'com.google.guava:guava:32.1.1-jre'
+    implementation 'org.apache.commons:commons-lang3:3.12.0'
+    implementation 'net.rubygrapefruit:ansi-control-sequence-util:0.3'
+    implementation 'org.gradle.exemplar:samples-check:1.0.0'
+    implementation localGroovy()
+
+    testImplementation platform("org.spockframework:spock-bom:2.2-groovy-3.0")
+    testImplementation 'org.spockframework:spock-core'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+
+    integrationTestImplementation platform("org.spockframework:spock-bom:2.2-groovy-3.0")
+    integrationTestImplementation 'org.spockframework:spock-core'
+    integrationTestRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+    integrationTestImplementation(project)
+
+    functionalTestImplementation platform("org.spockframework:spock-bom:2.2-groovy-3.0")
+    functionalTestImplementation 'org.spockframework:spock-core'
+    functionalTestRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+def integrationTestTask = tasks.register("integrationTest", Test) {
+    description = 'Runs the integration tests.'
+    group = "verification"
+    testClassesDirs = sourceSets.integrationTest.output.classesDirs
+    classpath = sourceSets.integrationTest.runtimeClasspath
+    mustRunAfter(tasks.named('test'))
+}
+
+//tasks.register('checkstyleMain', Checkstyle) {
+//    source = sourceSets.main.allJava
+//    classpath = sourceSets.main.compileClasspath
+//    checkstyleClasspath = sourceSets.main.compileClasspath
+//    configFile = file("$rootDir/config/checkstyle/checkstyle.xml")
+//    configDirectory = file("$rootDir/config/checkstyle")
+//}
+//
+//tasks.register('checkstyleTest', Checkstyle) {
+//    source = sourceSets.test.allJava
+//    classpath = sourceSets.test.compileClasspath
+//    checkstyleClasspath = sourceSets.test.compileClasspath
+//    configFile = file("$rootDir/config/checkstyle/checkstyle.xml")
+//    configDirectory = file("$rootDir/config/checkstyle")
+//}
+//
+//def otherSourceSets = sourceSets.findAll { sourceSet ->
+//    !sourceSet.name in ['main', 'test']
+//}
+//
+//// 定义 checkstyleOther 任务，处理其他 sourceSets
+//tasks.register('checkstyleOther', Checkstyle) {
+//    source = files(otherSourceSets*.allJava)
+//    classpath = files(otherSourceSets*.compileClasspath)
+//    checkstyleClasspath = files(otherSourceSets*.compileClasspath)
+//    configFile = file("$rootDir/config/checkstyle/checkstyle.xml")
+//    configDirectory = file("$rootDir/config/checkstyle")
+//}
+
+tasks.withType(Test).configureEach {
+    // Using JUnitPlatform for running tests
     useJUnitPlatform()
 }
+
+tasks.named('check') {
+    dependsOn integrationTestTask
+//    dependsOn tasks.named('checkstyleMain')
+//    dependsOn tasks.named('checkstyleTest')
+//    dependsOn tasks.named('checkstyleOther')
+}
+
+//tasks.named('check').configure {
+//    doFirst {
+//        println "Check task dependencies:"
+//        dependsOn.each { dependency ->
+//            if (dependency instanceof String) {
+//                println "String dependency: $dependency"
+//            } else if (dependency instanceof Task) {
+//                println "Dependency task path: ${dependency.path}"
+//            } else {
+//                println "Other type of dependency: ${dependency.getClass().name}"
+//            }
+//        }
+//    }
+//}

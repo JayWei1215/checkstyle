@@ -56,8 +56,12 @@ sourceSets {
         groovy {
             srcDirs = ['src/integrationTest/groovy']
         }
-        compileClasspath += sourceSets.main.output + configurations.integrationTestCompileClasspath
-        runtimeClasspath += sourceSets.main.output + configurations.integrationTestRuntimeClasspath
+        resources {
+            srcDirs = ['src/integrationTest/resources']
+        }
+       // compileClasspath += sourceSets.main.output + configurations.integrationTestCompileClasspath
+        //runtimeClasspath += sourceSets.main.output + configurations.integrationTestRuntimeClasspath
+        compileClasspath += sourceSets.main.output + configurations.testRuntimeClasspath
     }
     functionalTest {
         groovy {
@@ -79,10 +83,12 @@ dependencies {
     testImplementation platform("org.spockframework:spock-bom:2.2-groovy-3.0")
     testImplementation 'org.spockframework:spock-core'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+    testImplementation gradleTestKit()
 
     integrationTestImplementation platform("org.spockframework:spock-bom:2.2-groovy-3.0")
     integrationTestImplementation 'org.spockframework:spock-core'
     integrationTestRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+    integrationTestImplementation gradleTestKit()
     integrationTestImplementation(project)
 
     functionalTestImplementation platform("org.spockframework:spock-bom:2.2-groovy-3.0")
